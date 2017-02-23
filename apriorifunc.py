@@ -15,7 +15,6 @@ minsupmap目前全部指定0.1
 import pymysql
 
 ITEMNUM = 1285
-ITEMLEN = 4
 
 
 class Data:
@@ -139,7 +138,7 @@ class Graph(object):
         self.node_neighbors.pop(a)
 
     def displaygraph(self):
-        arcs = sorted(g.node_neighbors.items(), key=lambda n: len(n[1]), reverse=True)
+        arcs = sorted(self.node_neighbors.items(), key=lambda n: len(n[1]), reverse=True)
         for arc in arcs:
             print arc[0]
             print "~~~"
@@ -265,6 +264,9 @@ def getdataarray():
         conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
         cur = conn.cursor()
         cur.execute("USE apriori")
+        cur.execute("SELECT * FROM apriori.seq")
+        res=cur.fetchall()
+        ITEMNUM=len(res)
         cur.execute("SELECT pid FROM apriori.count where sum/(select count(*) from apriori.seq)>0.1 order by sum desc;")
         res = cur.fetchall()
         for row in res:
