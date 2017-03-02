@@ -203,8 +203,29 @@ class Graph(object):
                     i += 1
                     p = self.node_neighbors[s.peek()][i] if len(self.node_neighbors[s.peek()]) > i else -1
 
-
-def rules(Lar):
+def autoInsert(rules_table,frontfield,backfield,constantfield,frontdata,backdata,constantdata):
+    str="INSERT IGNORE INTO "+rules_table+"("
+    for i in range(len(constantfield)):
+        str+="`"+constantfield[i]+"`,"
+    for i in range(len(frontdata)):
+        str+="`"+frontfield[i]+"`,"
+    for i in range(len(backdata)):
+        str+="`"+backfield[i]+"`,"
+    str=str[:-1]
+    str+=") VALUES("
+    for i in range(len(constantdata)):
+        str+="%lf,"%(constantdata[i])
+    for i in range(len(frontdata)):
+        str+="%d,"%(frontdata[i])
+    for i in range(len(backdata)):
+        str+="%d,"%(backdata[i])
+    str=str[:-1]
+    str+=")"
+    return str
+def rules(Lar,target):
+    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    cur = conn.cursor()
+    cur.execute("USE supervision")
     for i in range(2, len(Lar) + 1):
         j = 0
         for j in range(len(Lar[i - 1].sup)):
@@ -245,36 +266,57 @@ def rules(Lar):
                     if eq:
                         counts = Lar[tp1 - 1].sup[jj] * ITEMNUM
                         break
-                if Lar[i - 1].sup[j] * ITEMNUM / counts >= 0.04:  # 检查是否大于等于最小置信度阈值 目前指定0.04
+                if Lar[i - 1].sup[j] * ITEMNUM / counts >= 0.1:  # 检查是否大于等于最小置信度阈值 目前指定0.3
                     print temp1,
                     print "==>",
                     print temp2
                     print "置信度:",
-                    print (Lar[i - 1].sup[j] * ITEMNUM / counts) * 100,
+                    confidence=(Lar[i - 1].sup[j] * ITEMNUM / counts)
+                    print confidence*100,
                     print "%"
                     print "支持度",
-                    print (Lar[i - 1].sup[j]) * 100,
+                    support=(Lar[i - 1].sup[j])
+                    print support*100,
                     print "%"
+                    constantdata=[support,confidence]
+                    str=autoInsert(target['rules_table'],target['frontfield'],target['backfield'],target['constantfield'],temp1,temp2,constantdata)
+                    cur.execute(str)
+    cur.close()
+    conn.commit()
+    conn.close()
 
+#获得强关联规则
+def getrules(dataarray, minsupmap,target):
+    Lar = []
+    L1 = Large()
+    for d in dataarray:
+        L1.p += [d.bv]
+        L1.sup += [d.sup]
+    Lar += [L1]
+    g = Graph(dataarray, minsupmap, Lar)
+    while len(g.nodes()) > 0:
+        g.dfssearch(minsupmap, Lar)
+        g.deletenode()
+    rules(Lar,target)
 
-# 获得数据
-def getdataarray():
+# 获得ip_packet数据
+def get_ip_packet_dataarray():
     dataarray = []
     try:
         conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
         cur = conn.cursor()
-        cur.execute("USE apriori")
-        cur.execute("SELECT * FROM apriori.seq")
+        cur.execute("USE supervision")
+        cur.execute("SELECT * FROM supervision.ip_packet")
         res=cur.fetchall()
         ITEMNUM=len(res)
-        cur.execute("SELECT pid FROM apriori.count where sum/(select count(*) from apriori.seq)>0.1 order by sum desc;")
+        cur.execute("SELECT pid FROM supervision.ip_packet_count where sum/(select count(*) from supervision.ip_packet)>0.1 order by sum desc;")
         res = cur.fetchall()
         for row in res:
             d = Data(row[0])
             dataarray += [d]
         for d in dataarray:
             count = 0.0
-            cur.execute("SELECT id FROM apriori.seq where protocol=%d or process=%d or url=%d or time=%d;" % (
+            cur.execute("SELECT id FROM supervision.ip_packet where host=%d or user=%d   or recvip=%d or time=%d;" % (
                 d.bv, d.bv, d.bv, d.bv))
             res = cur.fetchall()
             for row in res:
@@ -287,27 +329,72 @@ def getdataarray():
     except  Exception:
         print("error")
     return dataarray
-
-#获得强关联规则
-def getrules(dataarray, minsupmap):
-    Lar = []
-    L1 = Large()
-    for d in dataarray:
-        L1.p += [d.bv]
-        L1.sup += [d.sup]
-    Lar += [L1]
-    g = Graph(dataarray, minsupmap, Lar)
-    while len(g.nodes()) > 0:
-        g.dfssearch(minsupmap, Lar)
-        g.deletenode()
-    rules(Lar)
-
-
-if __name__ == '__main__':
-    dataarray = getdataarray()
+# 获得ip_packet的规则
+def get_ip_packet_rules():
+    target={}
+    frontfield=["firstseq1","firstseq2","firstseq3"]
+    backfield=["lastseq1","lastseq2","lastseq3"]
+    rules_table="ip_packet_apriorirules"
+    constantfield=["support","confidence"]
+    dataarray = get_ip_packet_dataarray()
+    target['frontfield']=frontfield
+    target['backfield']=backfield
+    target['rules_table']=rules_table
+    target['constantfield']=constantfield
     minsupmap = {}
     i = 50
     while (i > 0):
         minsupmap[i] = 0.1
         i -= 1
-    getrules(dataarray,minsupmap)
+    getrules(dataarray,minsupmap,target)
+
+def get_warning_information_dataarray():
+    dataarray = []
+    try:
+        conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+        cur = conn.cursor()
+        cur.execute("USE supervision")
+        cur.execute("SELECT * FROM supervision.warning_information")
+        res=cur.fetchall()
+        ITEMNUM=len(res)
+        cur.execute("SELECT pid FROM supervision.warning_information_count where sum/(select count(*) from supervision.warning_information)>0.2 order by sum desc;")
+        res = cur.fetchall()
+        for row in res:
+            d = Data(row[0])
+            dataarray += [d]
+        for d in dataarray:
+            count = 0.0
+            cur.execute("SELECT id FROM supervision.warning_information where description=%d or userid=%d   or rank=%d or time=%d or species=%d;" % (
+                d.bv, d.bv, d.bv, d.bv, d.bv))
+            res = cur.fetchall()
+            for row in res:
+                d.tidlist[row[0] - 1] = 1
+                count += 1
+            d.sup = count / ITEMNUM
+        cur.close()
+        conn.commit()
+        conn.close()
+    except  Exception:
+        print("error")
+    return dataarray
+def get_warning_information_rules():
+    target={}
+    frontfield=["firstseq1","firstseq2","firstseq3","firstseq4"]
+    backfield=["lastseq1","lastseq2","lastseq3","lastseq4"]
+    rules_table="warning_information_apriorirules"
+    constantfield=["support","confidence"]
+    dataarray = get_warning_information_dataarray()
+    target['frontfield']=frontfield
+    target['backfield']=backfield
+    target['rules_table']=rules_table
+    target['constantfield']=constantfield
+    minsupmap = {}
+    i = 50
+    while (i > 0):
+        minsupmap[i] = 0.1
+        i -= 1
+    getrules(dataarray,minsupmap,target)
+
+if __name__ == '__main__':
+    #get_ip_packet_rules()
+    get_warning_information_rules()
