@@ -14,7 +14,9 @@ minsupmap目前全部指定0.1
 """
 import pymysql
 
-ITEMNUM = 1285
+ITEMNUM = 30000
+SUPPORT=0.1
+CONFIDENCE=0.1
 
 
 class Data:
@@ -204,24 +206,24 @@ class Graph(object):
                     p = self.node_neighbors[s.peek()][i] if len(self.node_neighbors[s.peek()]) > i else -1
 
 def autoInsert(rules_table,frontfield,backfield,constantfield,frontdata,backdata,constantdata):
-    str="INSERT IGNORE INTO "+rules_table+"("
+    sql="INSERT IGNORE INTO "+rules_table+"("
     for i in range(len(constantfield)):
-        str+="`"+constantfield[i]+"`,"
+        sql+="`"+constantfield[i]+"`,"
     for i in range(len(frontdata)):
-        str+="`"+frontfield[i]+"`,"
+        sql+="`"+frontfield[i]+"`,"
     for i in range(len(backdata)):
-        str+="`"+backfield[i]+"`,"
-    str=str[:-1]
-    str+=") VALUES("
+        sql+="`"+backfield[i]+"`,"
+    sql=sql[:-1]
+    sql+=") VALUES("
     for i in range(len(constantdata)):
-        str+="%lf,"%(constantdata[i])
+        sql+="%lf,"%(constantdata[i])
     for i in range(len(frontdata)):
-        str+="%d,"%(frontdata[i])
+        sql+="%d,"%(frontdata[i])
     for i in range(len(backdata)):
-        str+="%d,"%(backdata[i])
-    str=str[:-1]
-    str+=")"
-    return str
+        sql+="%d,"%(backdata[i])
+    sql=sql[:-1]
+    sql+=")"
+    return sql
 def rules(Lar,target):
     conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
     cur = conn.cursor()
@@ -266,7 +268,7 @@ def rules(Lar,target):
                     if eq:
                         counts = Lar[tp1 - 1].sup[jj] * ITEMNUM
                         break
-                if Lar[i - 1].sup[j] * ITEMNUM / counts >= 0.1:  # 检查是否大于等于最小置信度阈值 目前指定0.3
+                if Lar[i - 1].sup[j] * ITEMNUM / counts >= CONFIDENCE:  # 检查是否大于等于最小置信度阈值 目前指定0.3
                     print temp1,
                     print "==>",
                     print temp2
@@ -302,32 +304,30 @@ def getrules(dataarray, minsupmap,target):
 # 获得ip_packet数据
 def get_ip_packet_dataarray():
     dataarray = []
-    try:
-        conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
-        cur = conn.cursor()
-        cur.execute("USE supervision")
-        cur.execute("SELECT * FROM supervision.ip_packet")
-        res=cur.fetchall()
-        ITEMNUM=len(res)
-        cur.execute("SELECT pid FROM supervision.ip_packet_count where sum/(select count(*) from supervision.ip_packet)>0.1 order by sum desc;")
+    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    cur = conn.cursor()
+    cur.execute("USE supervision")
+    cur.execute("SELECT * FROM supervision.ip_packet")
+    res=cur.fetchall()
+    global ITEMNUM
+    ITEMNUM=len(res)
+    cur.execute("SELECT pid FROM supervision.ip_packet_count where (sum/%d)>%f order by sum desc;"%(ITEMNUM,SUPPORT))
+    res = cur.fetchall()
+    for row in res:
+        d = Data(row[0])
+        dataarray += [d]
+    for d in dataarray:
+        count = 0.0
+        cur.execute("SELECT id FROM supervision.ip_packet where host=%d or user=%d   or recvip=%d or time=%d;" % (
+            d.bv, d.bv, d.bv, d.bv))
         res = cur.fetchall()
         for row in res:
-            d = Data(row[0])
-            dataarray += [d]
-        for d in dataarray:
-            count = 0.0
-            cur.execute("SELECT id FROM supervision.ip_packet where host=%d or user=%d   or recvip=%d or time=%d;" % (
-                d.bv, d.bv, d.bv, d.bv))
-            res = cur.fetchall()
-            for row in res:
-                d.tidlist[row[0] - 1] = 1
-                count += 1
-            d.sup = count / ITEMNUM
-        cur.close()
-        conn.commit()
-        conn.close()
-    except  Exception:
-        print("error")
+            d.tidlist[row[0] - 1] = 1
+            count += 1
+        d.sup = count / ITEMNUM
+    cur.close()
+    conn.commit()
+    conn.close()
     return dataarray
 # 获得ip_packet的规则
 def get_ip_packet_rules():
@@ -344,38 +344,41 @@ def get_ip_packet_rules():
     minsupmap = {}
     i = 50
     while (i > 0):
-        minsupmap[i] = 0.1
+        minsupmap[i] = SUPPORT
         i -= 1
     getrules(dataarray,minsupmap,target)
 
 def get_warning_information_dataarray():
+    #f = open("test.txt","w")
     dataarray = []
-    try:
-        conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
-        cur = conn.cursor()
-        cur.execute("USE supervision")
-        cur.execute("SELECT * FROM supervision.warning_information")
-        res=cur.fetchall()
-        ITEMNUM=len(res)
-        cur.execute("SELECT pid FROM supervision.warning_information_count where sum/(select count(*) from supervision.warning_information)>0.2 order by sum desc;")
+    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    cur = conn.cursor()
+    cur.execute("USE supervision")
+    cur.execute("SELECT id FROM supervision.warning_information")
+    res=cur.fetchall()
+    global ITEMNUM
+    ITEMNUM=len(res)
+    sql="SELECT pid FROM supervision.warning_information_count where (sum/%d)>%f order by sum desc;"%(ITEMNUM,SUPPORT)
+    cur.execute(sql)
+    res = cur.fetchall()
+    for row in res:
+        d = Data(row[0])
+        dataarray += [d]
+    for d in dataarray:
+        count = 0.0
+        cur.execute("SELECT id FROM supervision.warning_information where description=%d or userid=%d   or rank=%d or time=%d or species=%d;" % (
+            d.bv, d.bv, d.bv, d.bv, d.bv))
         res = cur.fetchall()
         for row in res:
-            d = Data(row[0])
-            dataarray += [d]
-        for d in dataarray:
-            count = 0.0
-            cur.execute("SELECT id FROM supervision.warning_information where description=%d or userid=%d   or rank=%d or time=%d or species=%d;" % (
-                d.bv, d.bv, d.bv, d.bv, d.bv))
-            res = cur.fetchall()
-            for row in res:
-                d.tidlist[row[0] - 1] = 1
-                count += 1
-            d.sup = count / ITEMNUM
-        cur.close()
-        conn.commit()
-        conn.close()
-    except  Exception:
-        print("error")
+            #print row[0]-1
+            #f.write(str(row[0]-1))
+            #f.write('\n')
+            d.tidlist[row[0] - 1] = 1
+            count += 1
+        d.sup = count / ITEMNUM
+    cur.close()
+    conn.commit()
+    conn.close()
     return dataarray
 def get_warning_information_rules():
     target={}
@@ -391,7 +394,7 @@ def get_warning_information_rules():
     minsupmap = {}
     i = 50
     while (i > 0):
-        minsupmap[i] = 0.1
+        minsupmap[i] = SUPPORT
         i -= 1
     getrules(dataarray,minsupmap,target)
 
