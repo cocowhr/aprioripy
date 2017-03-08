@@ -13,7 +13,7 @@ minsupmap目前全部指定0.1
 最小置信度目前全部指定0.04  之后需要根据实际情况修改
 """
 import pymysql
-
+import time
 ITEMNUM = 30000
 SUPPORT=0.1
 CONFIDENCE=0.1
@@ -187,17 +187,20 @@ class Graph(object):
                                 nodes += [p]
                                 Lar[s.size()].p += [tuple(nodes)]
                                 Lar[s.size()].sup += [sup3]
-                        s.push(p)
-                        ps.push(i)
-                        i = 0
-                        p = self.node_neighbors[p][i] if len(self.node_neighbors[p]) > 0 else -1
+                                s.push(p)
+                                ps.push(i)
+                                i = 0
+                            else:
+                                i += 1
+                        else:
+                            i += 1
                     else:
                         i += 1
                 else:
                     s.push(p)
                     ps.push(i)
                     i = 0
-                    p = self.node_neighbors[p][i] if len(self.node_neighbors[p]) > 0 else -1
+                p = self.node_neighbors[p][i] if len(self.node_neighbors[p]) > i else -1
             else:
                 s.pop()
                 if not ps.isEmpty():
@@ -301,64 +304,28 @@ def getrules(dataarray, minsupmap,target):
         g.deletenode()
     rules(Lar,target)
 
-# 获得ip_packet数据
-def get_ip_packet_dataarray():
-    dataarray = []
+def get_ITEMNUM(target):
     conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
     cur = conn.cursor()
     cur.execute("USE supervision")
-    cur.execute("SELECT * FROM supervision.ip_packet")
+    sql="SELECT * FROM "
+    sql+=target
+    cur.execute(sql)
     res=cur.fetchall()
     global ITEMNUM
     ITEMNUM=len(res)
-    cur.execute("SELECT pid FROM supervision.ip_packet_count where (sum/%d)>%f order by sum desc;"%(ITEMNUM,SUPPORT))
-    res = cur.fetchall()
-    for row in res:
-        d = Data(row[0])
-        dataarray += [d]
-    for d in dataarray:
-        count = 0.0
-        cur.execute("SELECT id FROM supervision.ip_packet where host=%d or user=%d   or recvip=%d or time=%d;" % (
-            d.bv, d.bv, d.bv, d.bv))
-        res = cur.fetchall()
-        for row in res:
-            d.tidlist[row[0] - 1] = 1
-            count += 1
-        d.sup = count / ITEMNUM
     cur.close()
     conn.commit()
     conn.close()
-    return dataarray
-# 获得ip_packet的规则
-def get_ip_packet_rules():
-    target={}
-    frontfield=["firstseq1","firstseq2","firstseq3"]
-    backfield=["lastseq1","lastseq2","lastseq3"]
-    rules_table="ip_packet_apriorirules"
-    constantfield=["support","confidence"]
-    dataarray = get_ip_packet_dataarray()
-    target['frontfield']=frontfield
-    target['backfield']=backfield
-    target['rules_table']=rules_table
-    target['constantfield']=constantfield
-    minsupmap = {}
-    i = 50
-    while (i > 0):
-        minsupmap[i] = SUPPORT
-        i -= 1
-    getrules(dataarray,minsupmap,target)
-
-def get_warning_information_dataarray():
-    #f = open("test.txt","w")
+# 获得数据
+def get_dataarray(target,targetcount,field):
     dataarray = []
     conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
     cur = conn.cursor()
     cur.execute("USE supervision")
-    cur.execute("SELECT id FROM supervision.warning_information")
-    res=cur.fetchall()
-    global ITEMNUM
-    ITEMNUM=len(res)
-    sql="SELECT pid FROM supervision.warning_information_count where (sum/%d)>%f order by sum desc;"%(ITEMNUM,SUPPORT)
+    sql="SELECT pid FROM "
+    sql+=targetcount
+    sql+=" where (sum/%d)>%f order by sum desc"%(ITEMNUM,SUPPORT)
     cur.execute(sql)
     res = cur.fetchall()
     for row in res:
@@ -366,13 +333,16 @@ def get_warning_information_dataarray():
         dataarray += [d]
     for d in dataarray:
         count = 0.0
-        cur.execute("SELECT id FROM supervision.warning_information where description=%d or userid=%d   or rank=%d or time=%d or species=%d;" % (
-            d.bv, d.bv, d.bv, d.bv, d.bv))
+        sql="SELECT id FROM "
+        sql+=target
+        sql+=" where"
+        for i in range(len(field)):
+            sql+="`%s`"%(field[i])
+            sql+="=%d or"%(d.bv)
+        sql=sql[:-3]
+        cur.execute(sql)
         res = cur.fetchall()
         for row in res:
-            #print row[0]-1
-            #f.write(str(row[0]-1))
-            #f.write('\n')
             d.tidlist[row[0] - 1] = 1
             count += 1
         d.sup = count / ITEMNUM
@@ -380,24 +350,74 @@ def get_warning_information_dataarray():
     conn.commit()
     conn.close()
     return dataarray
-def get_warning_information_rules():
+def translate(target):
+    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    cur = conn.cursor()
+    cur.execute("USE supervision")
+    sql="SELECT * FROM "
+    sql+=target['rules_table']
+    cur.execute(sql)
+    res = cur.fetchall()
+    for row in res:
+        rule=[]
+        for i in range(1,len(row)-2):
+            if row[i]:
+                sql="SELECT name FROM "
+                sql+=target['codes']
+                sql+=" where id="
+                sql+=str(row[i])
+                cur.execute(sql)
+                res = cur.fetchall()
+                rule+=[(res[0][0]).encode("gbk")]
+        rule+=[str(row[-2])]
+        rule+=[str(row[-1])]
+        print str(rule).decode('string_escape')
+    cur.close()
+    conn.commit()
+    conn.close()
+# 获得ip_packet的规则
+def get_table_rules(name,field):
     target={}
-    frontfield=["firstseq1","firstseq2","firstseq3","firstseq4"]
-    backfield=["lastseq1","lastseq2","lastseq3","lastseq4"]
-    rules_table="warning_information_apriorirules"
+    frontfield=[]
+    backfield=[]
+    rules_table=""
     constantfield=["support","confidence"]
-    dataarray = get_warning_information_dataarray()
+    for i in range(1,len(field)):
+        frontfield+=["firstseq"+str(i)]
+        backfield+=["lastseq"+str(i)]
+        rules_table=name+"_apriorirules"
     target['frontfield']=frontfield
     target['backfield']=backfield
     target['rules_table']=rules_table
     target['constantfield']=constantfield
+    get_ITEMNUM(name)
+    dataarray = get_dataarray(name,name+"_count",field)
+    target['codes']=name+"_codes"
     minsupmap = {}
     i = 50
     while (i > 0):
         minsupmap[i] = SUPPORT
         i -= 1
     getrules(dataarray,minsupmap,target)
+    translate(target)
+def get_ip_packet_rules():
+    field=["time","host","user","recvip"]
+    get_table_rules("ip_packet",field)
+def get_warning_information_rules():
+    field=["time","userid","rank","description","species"]
+    get_table_rules("warning_information",field)
+def get_data_process_fileinfo_file_rules():
+    field=["time","file_name","user","operate_type","host_id"]
+    get_table_rules("data_process_fileinfo_file",field)
+def get_data_process_fileinfo_type_rules():
+    field=["time","file_type","user","operate_type","host_id"]
+    get_table_rules("data_process_fileinfo_type",field)
 
 if __name__ == '__main__':
+    start = time.clock()
     #get_ip_packet_rules()
-    get_warning_information_rules()
+    #get_warning_information_rules()
+    #get_data_process_fileinfo_file_rules()
+    #get_data_process_fileinfo_type_rules()
+    end = time.clock()
+    print str(end-start)+"s"
