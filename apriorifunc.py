@@ -16,9 +16,9 @@ import time
 
 ITEMNUM = 30000
 CODESNUM=1
-SUPPORT = 0.1
+SUPPORT = 0.01
 CONFIDENCE = 0.1
-
+SEQLEN=4
 
 class Data:
     def __init__(self, _bv):
@@ -68,22 +68,105 @@ class Large:
         self.p = []
         self.sup = []
 
-
-def saveLar(Lar,codes,target):
-    f = open(target+'_list.txt','w')
+def getConnection():
+    conn = pymysql.connect(host='localhost',db='supervision', user='root', passwd='root', port=3306, charset='utf8')#之后可以放到配置文件中读取
+    return conn
+#特殊挖掘情况保存频繁集
+def saveProcessLar(Lar,target):
+    conn=getConnection()
+    cur=conn.cursor()
+    # sql="DROP TABLE IF EXISTS `"
+    # sql+=target['result']
+    # sql+="`;"
+    sql="CREATE TABLE if not exists "
+    sql+=target['result']
+    sql+=" (`id` int(11) NOT NULL AUTO_INCREMENT,`support` double NOT NULL,`create_time` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ,`user` varchar(45) NOT NULL, "
+    for i in range(len(Lar)):
+        sql+="`process%d`"%(i+1)
+        sql+=" varchar(255) DEFAULT NULL,"
+    sql+=" PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8;"
+    cur.execute(sql)
+    ###
+    sql="select count(*) from information_schema.columns where table_schema='supervision' and table_name='data_process_processinfo_result';"
+    cur.execute(sql)
+    res = cur.fetchall()
+    num=res[0][0]-4#减去id support user和createtime
+    if len(Lar)>num:
+        for j in range (num,len(Lar)):
+            sql="alter table "
+            sql+=target['result']
+            sql+=" add `process%d` "%(j+1)
+            sql+=" varchar(255) DEFAULT NULL"
+            cur.execute(sql)
+    ###
+    basesql="INSERT INTO " + target['result'] + "("
+    codes=target['codes']
+    for ii in range(1,len(Lar)):
+        Large=Lar[ii]
+        for index in range(len(Large.p)):
+            sql=basesql
+            for ind in range(len(Large.p[index])):
+                sql+="`process%d`, "%(ind+1)
+            sql+="`support`,`user` "
+            sql+=") VALUES("
+            for ind in range(len(Large.p[index])):
+                sql+="'%s', "%(codes[Large.p[index][ind]])
+            sql+=str(Large.sup[index])
+            sql+=", "
+            sql+="'%s'"%(target['user'])
+            sql+=")"
+            cur.execute(sql)
+    cur.close()
+    conn.commit()
+    conn.close()
+def saveLar(Lar,target):
+    conn=getConnection()
+    cur=conn.cursor()
+    sql="TRUNCATE TABLE `"
+    sql+=target['result']
+    sql+="`;"
+    cur.execute(sql)
+    basesql="INSERT INTO " + target['result'] + "("
+    basesql2 = "SELECT * FROM "
+    basesql2 += target['codes']
+    basesql2 += " where id="
+    field=target['field']
+    # sql += str(row[i])
+    # cur.execute(sql)
+    # res = cur.fetchall()
+    # rule += [(res[0][1])]
     for Large in Lar:
         for index in range(len(Large.p)):
-            f.write("(")
-            if isinstance(Large.p[index],int):
-                f.write(codes[Large.p[index]])
+            if isinstance(Large.p[index],int):#针对Lar[0]特殊处理
+                sql=basesql2+str(Large.p[index])
+                cur.execute(sql)
+                res = cur.fetchall()
+                sql=basesql
+                sql+="`%s` ,`support` ) VALUES("%(field[res[0][2]])
+                sql+="'%s'"%(res[0][1])
+                sql+=" , "
+                sql+=str(Large.sup[index])
+                sql+=")"
+                cur.execute(sql)
             else:
-                for p in Large.p[index]:
-                    f.write(codes[p])
-                    f.write(" ")
-                f.write(")")
-            f.write(" ")
-            f.write(str(Large.sup[index]))
-            f.write("\n")
+                rule=[]
+                sql=basesql
+                for ind in range(len(Large.p[index])):
+                    sql2=basesql2+str(Large.p[index][ind])
+                    cur.execute(sql2)
+                    res = cur.fetchall()
+                    sql+="`%s`, "%(field[res[0][2]])
+                    rule+=[res[0][1]]
+                sql+="`support` "
+                sql+=") VALUES("
+                for ind in range(len(Large.p[index])):
+                    sql+="'%s', "%(rule[ind])
+                sql+=str(Large.sup[index])
+                sql+=")"
+                cur.execute(sql)
+    cur.close()
+    conn.commit()
+    conn.close()
 
 
 # tidlist与操作
@@ -230,24 +313,27 @@ def autoInsert(rules_table, frontfield, backfield, constantfield, frontdata, bac
     for i in range(len(constantfield)):
         sql += "`" + constantfield[i] + "`,"
     for i in range(len(frontdata)):
-        sql += "`" + frontfield[i] + "`,"
+        if frontdata[i]>0:
+            sql += "`" + frontfield[i] + "`,"
     for i in range(len(backdata)):
-        sql += "`" + backfield[i] + "`,"
+        if backdata[i]>0:
+            sql += "`" + backfield[i] + "`,"
     sql = sql[:-1]
     sql += ") VALUES("
     for i in range(len(constantdata)):
         sql += "%lf," % (constantdata[i])
     for i in range(len(frontdata)):
-        sql += "%d," % (frontdata[i])
+        if frontdata[i]>0:
+            sql += "%d," % (frontdata[i])
     for i in range(len(backdata)):
-        sql += "%d," % (backdata[i])
+        if backdata[i]>0:
+            sql += "%d," % (backdata[i])
     sql = sql[:-1]
     sql += ")"
     return sql
 def rules(Lar, target):
-    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    conn =getConnection()
     cur = conn.cursor()
-    cur.execute("USE supervision")
     for i in range(2, len(Lar) + 1):
         for j in range(len(Lar[i - 1].sup)):
             n = 1
@@ -283,6 +369,23 @@ def rules(Lar, target):
                         counts = Lar[tp1 - 1].sup[jj] * ITEMNUM
                         break
                 if Lar[i - 1].sup[j] * ITEMNUM / counts >= CONFIDENCE:  # 检查是否大于等于最小置信度阈值 目前指定0.3
+                    seq1=[-1]*SEQLEN
+                    seq2=[-1]*SEQLEN
+                    basesql="SELECT `column` FROM "
+                    basesql+=target['count']
+                    basesql+=" where `pid`="
+                    for idx in range(len(temp1)):
+                        sql=basesql
+                        sql+=str(temp1[idx])
+                        cur.execute(sql)
+                        res=cur.fetchall()
+                        seq1[res[0][0]]=temp1[idx]
+                    for idx in range(len(temp2)):
+                        sql=basesql
+                        sql+=str(temp2[idx])
+                        cur.execute(sql)
+                        res=cur.fetchall()
+                        seq2[res[0][0]]=temp2[idx]
                     print temp1,
                     print "==>",
                     print temp2
@@ -295,9 +398,9 @@ def rules(Lar, target):
                     print support * 100,
                     print "%"
                     constantdata = [support, confidence]
-                    str = autoInsert(target['rules_table'], target['frontfield'], target['backfield'],
-                                     target['constantfield'], temp1, temp2, constantdata)
-                    cur.execute(str)
+                    sql = autoInsert(target['rules_table'], target['frontfield'], target['backfield'],
+                                     target['constantfield'], seq1, seq2, constantdata)
+                    cur.execute(sql)
     cur.close()
     conn.commit()
     conn.close()
@@ -305,9 +408,8 @@ def rules(Lar, target):
 # 获得数据
 def get_dataarray(target, targetcount, field):
     dataarray = []
-    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    conn =getConnection()
     cur = conn.cursor()
-    cur.execute("USE supervision")
     sql= "SELECT COUNT(*) FROM "
     sql+= targetcount
     cur.execute(sql)
@@ -342,9 +444,8 @@ def get_dataarray(target, targetcount, field):
     conn.close()
     return dataarray
 def get_ITEMNUM(target):
-    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    conn =getConnection()
     cur = conn.cursor()
-    cur.execute("USE supervision")
     sql = "SELECT * FROM "
     sql += target
     cur.execute(sql)
@@ -367,52 +468,70 @@ def getrules(dataarray, minsupmap, target):
         g.dfssearch(minsupmap, Lar)
         g.deletenode()
     if 1==target['type']:
-        rules(Lar, target)
+        saveLar(Lar,target)
+        #rules(Lar, target)#挖掘关联规则 目前不需要
     else:
-        saveLar(Lar,target['codes'],"process")
-def translate(target):
-    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
-    cur = conn.cursor()
-    cur.execute("USE supervision")
-    sql = "SELECT * FROM "
-    sql += target['rules_table']
-    cur.execute(sql)
-    res = cur.fetchall()
-    for row in res:
-        rule = []
-        for i in range(1, len(row) - 2):
-            if row[i]:
-                sql = "SELECT name FROM "
-                sql += target['codes']
-                sql += " where id="
-                sql += str(row[i])
-                cur.execute(sql)
-                res = cur.fetchall()
-                rule += [(res[0][0]).encode("gbk")]
-        rule += [str(row[-2])]
-        rule += [str(row[-1])]
-        print str(rule).decode('string_escape')
-    cur.close()
-    conn.commit()
-    conn.close()
+        saveProcessLar(Lar,target)
+#调试用 显示规则中文名
+# def translate(target):
+#     conn =getConnection()
+#     cur = conn.cursor()
+#     sql = "SELECT * FROM "
+#     sql += target['rules_table']
+#     cur.execute(sql)
+#     res = cur.fetchall()
+#     for row in res:
+#         rule = []
+#         column=[]
+#         for i in range(1, len(row) - 3):
+#             if row[i]:
+#                 sql = "SELECT * FROM "
+#                 sql += target['codes']
+#                 sql += " where id="
+#                 sql += str(row[i])
+#                 cur.execute(sql)
+#                 res = cur.fetchall()
+#                 rule += [(res[0][1])]
+#                 column+=[(res[0][2])]
+#         # rule += [str(row[-2])]
+#         # rule += [str(row[-1])]
+#         print str(rule).decode('string_escape')
+#         sql = "INSERT IGNORE INTO " + target['result'] + "("
+#         for i in range(len(column)):
+#             sql+="`%s` ,"%(target['field'][column[i]])
+#         sql+="`support` "
+#         sql += ") VALUES("
+#         for i in range(len(rule)):
+#             sql += "'%s'," % (rule[i])
+#         sql += "'%s'" % (str(row[-3]))
+#         sql += ")"
+#         cur.execute(sql)
+#     cur.close()
+#     conn.commit()
+#     conn.close()
 # 获得规则
 def get_table_rules(name, field):
     target = {}
     frontfield = []
     backfield = []
-    rules_table = ""
     constantfield = ["support", "confidence"]
-    for i in range(1, len(field)):
-        frontfield += ["firstseq" + str(i)]
-        backfield += ["lastseq" + str(i)]
-        rules_table = name + "_apriorirules"
+    global SEQLEN
+    SEQLEN=len(field)
+    for i in range(0, len(field)):
+        frontfield += ["front_" + field[i]]
+        backfield += ["back_" + field[i]]
+    rules_table = name + "_apriorirules"
+    result=name+"_result"
+    target['field']=field
     target['frontfield'] = frontfield
     target['backfield'] = backfield
     target['rules_table'] = rules_table
+    target['result']=result
     target['constantfield'] = constantfield
     get_ITEMNUM(name)
     dataarray = get_dataarray(name, name + "_count", field)
     target['codes'] = name + "_codes"
+    target['count']=name+"_count"
     target['type']=1
     minsupmap = {}
     i = CODESNUM
@@ -420,12 +539,12 @@ def get_table_rules(name, field):
         minsupmap[i] = SUPPORT
         i -= 1
     getrules(dataarray, minsupmap, target)
-    translate(target)
+    #translate(target)  #调试用 显示规则中文名
 def get_ip_packet_rules():
-    field = ["time", "host", "user", "recvip"]
-    get_table_rules("ip_packet", field)
+    field=["time","host_id","send_mac_address","recv_mac_address","send_ip","send_port","recv_ip","recv_port"]
+    get_table_rules("data_process_ippacket", field)
 def get_warning_information_rules():
-    field = ["time", "userid", "rank", "description", "species"]
+    field = ["time", "userid",  "description","rank", "species"]
     get_table_rules("warning_information", field)
 def get_data_process_fileinfo_file_rules():
     field = ["time", "file_name", "user", "operate_type", "host_id"]
@@ -445,79 +564,87 @@ def get_data_process_resource_warning_rules():
 #特殊挖掘
 def get_data_process_processinfo_rules():
     global ITEMNUM
-    ITEMNUM = 4
+    ITEMNUM = 2
     global SUPPORT
     SUPPORT = 0.75
-    conn = pymysql.connect(host='localhost', user='root', passwd='root', port=3306, charset='utf8')
+    conn =getConnection()
     cur = conn.cursor()
-    cur.execute("USE supervision")
-    processlist = [0] * ITEMNUM
-    processlist[0] = []
-    processlist[1] = []
-    processlist[2] = []
-    processlist[3] = []
-    sql = "SELECT process FROM supervision.data_process_processinfo_simultaneity where `begintime`>='2017-03-01 10:00:00' and `endtime`<='2017-03-01 12:00:00';"
+    users=[]
+    sql="SELECT DISTINCT `user` FROM supervision.data_process_processinfo;"
     cur.execute(sql)
     res = cur.fetchall()
     for row in res:
-        processlist[0] += [row[0]]
-    sql = "SELECT process FROM supervision.data_process_processinfo_simultaneity where `begintime`>='2017-03-02 10:00:00' and `endtime`<='2017-03-02 12:00:00';"
-    cur.execute(sql)
-    res = cur.fetchall()
-    for row in res:
-        processlist[1] += [row[0]]
-    sql = "SELECT process FROM supervision.data_process_processinfo_simultaneity where `begintime`>='2017-03-03 10:00:00' and `endtime`<='2017-03-03 12:00:00';"
-    cur.execute(sql)
-    res = cur.fetchall()
-    for row in res:
-        processlist[2] += [row[0]]
-    sql = "SELECT process FROM supervision.data_process_processinfo_simultaneity where `begintime`>='2017-03-04 10:00:00' and `endtime`<='2017-03-04 12:00:00';"
-    cur.execute(sql)
-    res = cur.fetchall()
-    for row in res:
-        processlist[3] += [row[0]]
-    processlist[0] = list(set(processlist[0]))
-    processlist[1] = list(set(processlist[1]))
-    processlist[2] = list(set(processlist[2]))
-    processlist[3] = list(set(processlist[3]))
-    Codesmap = {}
-    for plist in processlist:
-        for p in plist:
-            Codesmap[p] = 1
-    Codes = []
-    id = 1
-    for key in Codesmap.keys():
-        code = Code(id, key)
-        Codes += [code]
-        id += 1
-    global CODESNUM
-    CODESNUM=len(Codes)
-    Codesmap.clear()
-    for c in Codes:
-        Codesmap[c.id] = c.code
-    dataarray = []
-    for c in Codes:
-        sum = 0.0
-        data = Data(c.id)
-        for i in range(len(processlist)):
-            for j in range(len(processlist[i])):
-                if c.code == processlist[i][j]:
-                    sum += 1
-                    data.tidlist[i] = 1
-                    processlist[i][j] = c.id
-        if sum / ITEMNUM > SUPPORT:
-            data.sup = sum / ITEMNUM
-            dataarray += [data]
-    dataarray = sorted(dataarray,key=lambda d:(-(d.sup),d.bv))
-    minsupmap = {}
-    i = CODESNUM
-    while (i > 0):
-        minsupmap[i] = SUPPORT
-        i -= 1
-    target={}
-    target['type']=2
-    target['codes']=Codesmap
-    getrules(dataarray,minsupmap,target)
+        users+=[row[0]]
+    for user in users:
+        processlist = [0] * ITEMNUM
+        processlist[0] = []
+        processlist[1] = []
+        # processlist[2] = []
+        # processlist[3] = []
+        sql = "SELECT `process_name` FROM supervision.data_process_processinfo where `begintime`>='2017-03-03 10:00:00' and `endtime`<='2017-03-03 11:00:00' and `user`='%s';"%(user)
+        cur.execute(sql)
+        res = cur.fetchall()
+        for row in res:
+            processlist[0] += [row[0]]
+        sql = "SELECT `process_name` FROM supervision.data_process_processinfo where `begintime`>='2017-03-04 10:00:00' and `endtime`<='2017-03-04 11:00:00' and `user`='%s';"%(user)
+        cur.execute(sql)
+        res = cur.fetchall()
+        for row in res:
+            processlist[1] += [row[0]]
+        # sql = "SELECT process FROM supervision.data_process_processinfo_simultaneity where `begintime`>='2017-03-03 10:00:00' and `endtime`<='2017-03-03 12:00:00';"
+        # cur.execute(sql)
+        # res = cur.fetchall()
+        # for row in res:
+        #     processlist[2] += [row[0]]
+        # sql = "SELECT process FROM supervision.data_process_processinfo_simultaneity where `begintime`>='2017-03-04 10:00:00' and `endtime`<='2017-03-04 12:00:00';"
+        # cur.execute(sql)
+        # res = cur.fetchall()
+        # for row in res:
+        #     processlist[3] += [row[0]]
+        processlist[0] = list(set(processlist[0]))
+        processlist[1] = list(set(processlist[1]))
+        # processlist[2] = list(set(processlist[2]))
+        # processlist[3] = list(set(processlist[3]))
+        Codesmap = {}
+        for plist in processlist:
+            for p in plist:
+                Codesmap[p] = 1
+        Codes = []
+        id = 1
+        for key in Codesmap.keys():
+            code = Code(id, key)
+            Codes += [code]
+            id += 1
+        global CODESNUM
+        CODESNUM=len(Codes)
+        Codesmap.clear()
+        for c in Codes:
+            Codesmap[c.id] = c.code
+        dataarray = []
+        for c in Codes:
+            sum = 0.0
+            data = Data(c.id)
+            for i in range(len(processlist)):
+                for j in range(len(processlist[i])):
+                    if c.code == processlist[i][j]:
+                        sum += 1
+                        data.tidlist[i] = 1
+                        processlist[i][j] = c.id
+            if sum / ITEMNUM > SUPPORT:
+                data.sup = sum / ITEMNUM
+                dataarray += [data]
+        dataarray = sorted(dataarray,key=lambda d:(-(d.sup),d.bv))
+        minsupmap = {}
+        i = CODESNUM
+        while (i > 0):
+            minsupmap[i] = SUPPORT
+            i -= 1
+        target={}
+        target['type']=2
+        target['codes']=Codesmap
+        target['result']="data_process_processinfo_result"
+        target['user']=user
+        getrules(dataarray,minsupmap,target)
     cur.close()
     conn.commit()
     conn.close()
@@ -525,13 +652,13 @@ def get_data_process_processinfo_rules():
 
 if __name__ == '__main__':
     start = time.clock()
-    #get_ip_packet_rules()
+    # get_ip_packet_rules()
     #get_warning_information_rules()
     # get_data_process_fileinfo_file_rules()
     # get_data_process_fileinfo_type_rules()
     # get_data_process_mediainfo_file_rules()
     # get_data_process_mediainfo_type_rules()
     #get_data_process_resource_warning_rules()
-    #get_data_process_processinfo_rules()
+    get_data_process_processinfo_rules()
     end = time.clock()
     print str(end - start) + "s"
